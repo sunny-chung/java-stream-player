@@ -1123,7 +1123,9 @@ public class StreamPlayer implements StreamPlayerInterface {
 	 */
 	@Override
 	public float getGainValue() {
-		return outlet.getGainValue();
+		float gain = outlet.getGainValue();
+		double volume = Math.pow(10.0, gain / 20.0);
+		return (float) volume;
     }
 
 	/**
