@@ -59,7 +59,7 @@ import javazoom.spi.PropertiesContainer;
  * @author GOXR3PLUS (www.goxr3plus.co.nf)
  * @author JavaZOOM (www.javazoom.net)
  */
-public class StreamPlayer implements StreamPlayerInterface, Callable<Void> {
+public class StreamPlayer implements StreamPlayerInterface {
 
 	/**
 	 * Class logger
@@ -148,6 +148,8 @@ public class StreamPlayer implements StreamPlayerInterface, Callable<Void> {
 	 */
 	private final Outlet outlet;
 
+	private MainLoopCallable mainLoopCallable;
+
 	/**
 	 * Default parameter less Constructor. A default logger will be used.
 	 */
@@ -188,9 +190,7 @@ public class StreamPlayer implements StreamPlayerInterface, Callable<Void> {
 	public void reset() {
 
 		// Close the stream
-		synchronized (audioLock) {
-			closeStream();
-		}
+		closeStream();
 
 		outlet.flushAndFreeDataLine();
 
@@ -274,12 +274,14 @@ public class StreamPlayer implements StreamPlayerInterface, Callable<Void> {
 		if (object == null)
 			return;
 
-		try {
-			source = DataSource.newDataSource(object);
-		} catch (OperationNotSupportedException e) {
-			e.printStackTrace();
+		synchronized (audioLock) {
+			try {
+				source = DataSource.newDataSource(object);
+			} catch (OperationNotSupportedException e) {
+				e.printStackTrace();
+			}
+			initAudioInputStream();
 		}
-		initAudioInputStream();
 	}
 
 	/**
@@ -292,8 +294,10 @@ public class StreamPlayer implements StreamPlayerInterface, Callable<Void> {
 	public void open(File file) throws StreamPlayerException {
 
 		logger.info(() -> "open(" + file + ")\n");
-		source = new FileDataSource(file);
-		initAudioInputStream();
+		synchronized (audioLock) {
+			source = new FileDataSource(file);
+			initAudioInputStream();
+		}
 	}
 
 	/**
@@ -305,8 +309,10 @@ public class StreamPlayer implements StreamPlayerInterface, Callable<Void> {
 	@Override
 	public void open(URL url) throws StreamPlayerException {
 		logger.info(() -> "open(" + url + ")\n");
-		source = new UrlDataSource(url);
-		initAudioInputStream();
+		synchronized (audioLock) {
+			source = new UrlDataSource(url);
+			initAudioInputStream();
+		}
 	}
 
 	/**
@@ -318,8 +324,10 @@ public class StreamPlayer implements StreamPlayerInterface, Callable<Void> {
 	@Override
 	public void open(InputStream stream) throws StreamPlayerException {
 		logger.info(() -> "open(" + stream + ")\n");
-		source = new StreamDataSource(stream);
-		initAudioInputStream();
+		synchronized (audioLock) {
+			source = new StreamDataSource(stream);
+			initAudioInputStream();
+		}
 	}
 
 	/**
@@ -563,32 +571,35 @@ public class StreamPlayer implements StreamPlayerInterface, Callable<Void> {
 	 */
 	@Override
 	public void play() throws StreamPlayerException {
-		if (status == Status.STOPPED)
-			initAudioInputStream();
-		if (status != Status.OPENED)
-			return;
+		synchronized (audioLock) {
+			if (status == Status.STOPPED)
+				initAudioInputStream();
+			if (status != Status.OPENED)
+				return;
 
-		// Shutdown previous Thread Running
-		awaitTermination();
+			// Shutdown previous Thread Running
+			awaitTermination();
 
-		// Open SourceDataLine.
-		try {
-			initLine();
-		} catch (final LineUnavailableException ex) {
-			throw new StreamPlayerException(PlayerException.CAN_NOT_INIT_LINE, ex);
-		}
+			// Open SourceDataLine.
+			try {
+				initLine();
+			} catch (final LineUnavailableException ex) {
+				throw new StreamPlayerException(PlayerException.CAN_NOT_INIT_LINE, ex);
+			}
 
-		// Open the sourceDataLine
-		if (outlet.isStartable()) {
-			outlet.start();
+			// Open the sourceDataLine
+			if (outlet.isStartable()) {
+				outlet.start();
 
-			// Proceed only if we have not problems
-			logger.info("Submitting new StreamPlayer Thread");
-			streamPlayerExecutorService.submit(this);
+				// Proceed only if we have not problems
+				logger.info("Submitting new StreamPlayer Thread");
+				mainLoopCallable = new MainLoopCallable();
+				streamPlayerExecutorService.submit(mainLoopCallable);
 
-			// Update the status
-			status = Status.PLAYING;
-			generateEvent(Status.PLAYING, getEncodedStreamPosition(), null);
+				// Update the status
+				status = Status.PLAYING;
+				generateEvent(Status.PLAYING, getEncodedStreamPosition(), null);
+			}
 		}
 	}
 
@@ -699,23 +710,23 @@ public class StreamPlayer implements StreamPlayerInterface, Callable<Void> {
 	public long seekBytes(final long bytes) throws StreamPlayerException {
 		long totalSkipped = 0;
 
-		// If it is File
-		if (source.isFile()) {
+		synchronized (audioLock) {
+			// If it is File
+			if (source.isFile()) {
 
-			// Check if the requested bytes are more than totalBytes of Audio
-			final long bytesLength = getTotalBytes();
-			logger.log(Level.INFO, "Bytes: " + bytes + " BytesLength: " + bytesLength);
-			if ((bytesLength <= 0) || (bytes >= bytesLength)) {
-				generateEvent(Status.EOM, getEncodedStreamPosition(), null);
-				return totalSkipped;
-			}
+				// Check if the requested bytes are more than totalBytes of Audio
+				final long bytesLength = getTotalBytes();
+				logger.log(Level.INFO, "Bytes: " + bytes + " BytesLength: " + bytesLength);
+				if ((bytesLength <= 0) || (bytes >= bytesLength)) {
+					generateEvent(Status.EOM, getEncodedStreamPosition(), null);
+					return totalSkipped;
+				}
 
-			logger.info(() -> "Bytes to skip : " + bytes);
-			final Status previousStatus = status;
-			status = Status.SEEKING;
+				logger.info(() -> "Bytes to skip : " + bytes);
+				final Status previousStatus = status;
+				status = Status.SEEKING;
 
-			try {
-				synchronized (audioLock) {
+				try {
 					generateEvent(Status.SEEKING, AudioSystem.NOT_SPECIFIED, null);
 					initAudioInputStream();
 					if (audioInputStream != null) {
@@ -730,23 +741,23 @@ public class StreamPlayer implements StreamPlayerInterface, Callable<Void> {
 							logger.info("Skipped : " + totalSkipped + "/" + bytes);
 							if (totalSkipped == -1)
 								throw new StreamPlayerException(
-									PlayerException.SKIP_NOT_SUPPORTED);
+										PlayerException.SKIP_NOT_SUPPORTED);
 
 							logger.info("Skeeping:" + totalSkipped);
 						}
 					}
-				}
-				generateEvent(Status.SEEKED, getEncodedStreamPosition(), null);
-				status = Status.OPENED;
-				if (previousStatus == Status.PLAYING)
-					play();
-				else if (previousStatus == Status.PAUSED) {
-					play();
-					pause();
-				}
+					generateEvent(Status.SEEKED, getEncodedStreamPosition(), null);
+					status = Status.OPENED;
+					if (previousStatus == Status.PLAYING)
+						play();
+					else if (previousStatus == Status.PAUSED) {
+						play();
+						pause();
+					}
 
-			} catch (final IOException ex) {
-				logger.log(Level.WARNING, ex.getMessage(), ex);
+				} catch (final IOException ex) {
+					logger.log(Level.WARNING, ex.getMessage(), ex);
+				}
 			}
 		}
 		return totalSkipped;
@@ -842,25 +853,25 @@ public class StreamPlayer implements StreamPlayerInterface, Callable<Void> {
 		return source.getDuration();
 	}
 
-	/**
-	 * Main loop.
-	 * <p>
-	 * Player Status == STOPPED || SEEKING = End of Thread + Freeing Audio
-	 * Resources.<br>
-	 * Player Status == PLAYING = Audio stream data sent to Audio line.<br>
-	 * Player Status == PAUSED = Waiting for another status.
-	 */
-	@Override
-	public Void call() {
-		int nBytesRead = 0;
-		final int audioDataLength = EXTERNAL_BUFFER_SIZE;
-		final ByteBuffer audioDataBuffer = ByteBuffer.allocate(audioDataLength);
-		audioDataBuffer.order(ByteOrder.LITTLE_ENDIAN);
+	private class MainLoopCallable implements Callable<Void> {
 
-		// Lock stream while playing.
-		synchronized (audioLock) {
+		/**
+		 * Main loop.
+		 * <p>
+		 * Player Status == STOPPED || SEEKING = End of Thread + Freeing Audio
+		 * Resources.<br>
+		 * Player Status == PLAYING = Audio stream data sent to Audio line.<br>
+		 * Player Status == PAUSED = Waiting for another status.
+		 */
+		@Override
+		public Void call() {
+			int nBytesRead = 0;
+			final int audioDataLength = EXTERNAL_BUFFER_SIZE;
+			final ByteBuffer audioDataBuffer = ByteBuffer.allocate(audioDataLength);
+			audioDataBuffer.order(ByteOrder.LITTLE_ENDIAN);
+
 			// Main play/pause loop.
-			while ((nBytesRead != -1) && status != Status.STOPPED && status != Status.NOT_SPECIFIED
+			while (mainLoopCallable == this && (nBytesRead != -1) && status != Status.STOPPED && status != Status.NOT_SPECIFIED
 				&& status != Status.SEEKING) {
 
 				try {
@@ -892,8 +903,18 @@ public class StreamPlayer implements StreamPlayerInterface, Callable<Void> {
 								System.arraycopy(audioDataBuffer.array(), 0, trimBuffer, 0, totalRead);
 							}
 
+							if (mainLoopCallable != this) {
+								// if another "main loop" replaces this, nothing should do and should exit immediately
+								return null;
+							}
+
 							// Writes audio data to the mixer via this source data line
 							outlet.getSourceDataLine().write(trimBuffer, 0, totalRead);
+
+							if (mainLoopCallable != this) {
+								// if another "main loop" replaces this, nothing should do and should exit immediately
+								return null;
+							}
 
 							// Compute position in bytes in encoded stream.
 							final int nEncodedBytes = getEncodedStreamPosition();
@@ -925,6 +946,11 @@ public class StreamPlayer implements StreamPlayerInterface, Callable<Void> {
 					generateEvent(Status.STOPPED, getEncodedStreamPosition(), null);
 				}
 			}
+			if (mainLoopCallable != this) {
+				// if another "main loop" replaces this, nothing should do and should exit immediately
+				return null;
+			}
+
 			// Free audio resources.
 			outlet.drainStopAndFreeDataLine();
 
@@ -935,15 +961,15 @@ public class StreamPlayer implements StreamPlayerInterface, Callable<Void> {
 			if (nBytesRead == -1)
 				generateEvent(Status.EOM, AudioSystem.NOT_SPECIFIED, null);
 
+			// Generate Event
+			status = Status.STOPPED;
+			generateEvent(Status.STOPPED, AudioSystem.NOT_SPECIFIED, null);
+
+			// Log
+			logger.info("Decoding thread completed");
+
+			return null;
 		}
-		// Generate Event
-		status = Status.STOPPED;
-		generateEvent(Status.STOPPED, AudioSystem.NOT_SPECIFIED, null);
-
-		// Log
-		logger.info("Decoding thread completed");
-
-		return null;
 	}
 
 	private void goOutOfPause() {
@@ -967,13 +993,15 @@ public class StreamPlayer implements StreamPlayerInterface, Callable<Void> {
 	@Override
 	public int getEncodedStreamPosition() {
 		int position = -1;
-		if (source.isFile() && encodedAudioInputStream != null)
-			try {
-				position = encodedAudioLength - encodedAudioInputStream.available();
-			} catch (final IOException ex) {
-				logger.log(Level.WARNING, "Cannot get m_encodedaudioInputStream.available()", ex);
-				stop();
-			}
+		synchronized (audioLock) {
+			if (source.isFile() && encodedAudioInputStream != null)
+				try {
+					position = encodedAudioLength - encodedAudioInputStream.available();
+				} catch (final IOException ex) {
+					logger.log(Level.WARNING, "Cannot get m_encodedaudioInputStream.available()", ex);
+					stop();
+				}
+		}
 		return position;
 	}
 
