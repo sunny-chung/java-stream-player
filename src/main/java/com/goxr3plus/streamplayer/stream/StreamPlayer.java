@@ -201,7 +201,7 @@ public class StreamPlayer implements StreamPlayerInterface {
 		encodedAudioLength = -1;
 
 		// Controls
-		outlet.setGainControl(null);
+//		outlet.setGainControl(null);
 		outlet.setPanControl(null);
 		outlet.setBalanceControl(null);
 
@@ -358,6 +358,8 @@ public class StreamPlayer implements StreamPlayerInterface {
 
 			// Determine Properties
 			determineProperties();
+
+			initLine();
 
 			// Generate Open Event
 			status = Status.OPENED;
@@ -1289,7 +1291,7 @@ public class StreamPlayer implements StreamPlayerInterface {
 	 */
 	@Override
 	public void setGain(final double fGain) {
-		if (isPlaying() || isPaused() && outlet.hasControl(FloatControl.Type.MASTER_GAIN, outlet.getGainControl())) {
+		if (outlet.hasControl(FloatControl.Type.MASTER_GAIN, outlet.getGainControl())) {
             final double logScaleGain = 20 * Math.log10(fGain);
 			outlet.getGainControl().setValue((float) logScaleGain);
         }
