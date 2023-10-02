@@ -946,24 +946,27 @@ public class StreamPlayer implements StreamPlayerInterface {
 					generateEvent(Status.STOPPED, getEncodedStreamPosition(), null);
 				}
 			}
-			if (mainLoopCallable != this) {
-				// if another "main loop" replaces this, nothing should do and should exit immediately
-				return null;
+
+			synchronized (audioLock) {
+				if (mainLoopCallable != this) {
+					// if another "main loop" replaces this, nothing should do and should exit immediately
+					return null;
+				}
+
+				// Free audio resources.
+				outlet.drainStopAndFreeDataLine();
+
+				// Close stream.
+				closeStream();
+
+				// Notification of "End Of Media"
+				if (nBytesRead == -1)
+					generateEvent(Status.EOM, AudioSystem.NOT_SPECIFIED, null);
+
+				// Generate Event
+				status = Status.STOPPED;
+				generateEvent(Status.STOPPED, AudioSystem.NOT_SPECIFIED, null);
 			}
-
-			// Free audio resources.
-			outlet.drainStopAndFreeDataLine();
-
-			// Close stream.
-			closeStream();
-
-			// Notification of "End Of Media"
-			if (nBytesRead == -1)
-				generateEvent(Status.EOM, AudioSystem.NOT_SPECIFIED, null);
-
-			// Generate Event
-			status = Status.STOPPED;
-			generateEvent(Status.STOPPED, AudioSystem.NOT_SPECIFIED, null);
 
 			// Log
 			logger.info("Decoding thread completed");
