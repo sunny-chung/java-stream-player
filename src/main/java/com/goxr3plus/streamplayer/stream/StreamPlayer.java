@@ -84,13 +84,6 @@ public class StreamPlayer implements StreamPlayerInterface, Callable<Void> {
 	/** The audio file format. */
 	private AudioFileFormat audioFileFormat;
 
-	// -------------------LOCKS---------------------
-
-	/**
-	 * It is used for synchronization in place of audioInputStream
-	 */
-	private final Object audioLock = new Object();
-
 	// -------------------VARIABLES---------------------
 	/** Name of the mixer to use */
 	private String mixerName;
@@ -188,9 +181,7 @@ public class StreamPlayer implements StreamPlayerInterface, Callable<Void> {
 	public void reset() {
 
 		// Close the stream
-		synchronized (audioLock) {
-			closeStream();
-		}
+		closeStream();
 
 		outlet.flushAndFreeDataLine();
 
@@ -715,25 +706,23 @@ public class StreamPlayer implements StreamPlayerInterface, Callable<Void> {
 			status = Status.SEEKING;
 
 			try {
-				synchronized (audioLock) {
-					generateEvent(Status.SEEKING, AudioSystem.NOT_SPECIFIED, null);
-					initAudioInputStream();
-					if (audioInputStream != null) {
+				generateEvent(Status.SEEKING, AudioSystem.NOT_SPECIFIED, null);
+				initAudioInputStream();
+				if (audioInputStream != null) {
 
-						long skipped;
-						// Loop until bytes are really skipped.
-						while (totalSkipped < bytes) { // totalSkipped < (bytes-SKIP_INACCURACY_SIZE)))
-							skipped = audioInputStream.skip(bytes - totalSkipped);
-							if (skipped == 0)
-								break;
-							totalSkipped += skipped;
-							logger.info("Skipped : " + totalSkipped + "/" + bytes);
-							if (totalSkipped == -1)
-								throw new StreamPlayerException(
-									PlayerException.SKIP_NOT_SUPPORTED);
+					long skipped;
+					// Loop until bytes are really skipped.
+					while (totalSkipped < bytes) { // totalSkipped < (bytes-SKIP_INACCURACY_SIZE)))
+						skipped = audioInputStream.skip(bytes - totalSkipped);
+						if (skipped == 0)
+							break;
+						totalSkipped += skipped;
+						logger.info("Skipped : " + totalSkipped + "/" + bytes);
+						if (totalSkipped == -1)
+							throw new StreamPlayerException(
+								PlayerException.SKIP_NOT_SUPPORTED);
 
-							logger.info("Skeeping:" + totalSkipped);
-						}
+						logger.info("Skeeping:" + totalSkipped);
 					}
 				}
 				generateEvent(Status.SEEKED, getEncodedStreamPosition(), null);
@@ -857,85 +846,82 @@ public class StreamPlayer implements StreamPlayerInterface, Callable<Void> {
 		final ByteBuffer audioDataBuffer = ByteBuffer.allocate(audioDataLength);
 		audioDataBuffer.order(ByteOrder.LITTLE_ENDIAN);
 
-		// Lock stream while playing.
-		synchronized (audioLock) {
-			// Main play/pause loop.
-			while ((nBytesRead != -1) && status != Status.STOPPED && status != Status.NOT_SPECIFIED
-				&& status != Status.SEEKING) {
+		// Main play/pause loop.
+		while ((nBytesRead != -1) && status != Status.STOPPED && status != Status.NOT_SPECIFIED
+			&& status != Status.SEEKING) {
 
-				try {
-					// Playing?
-					if (status == Status.PLAYING) {
+			try {
+				// Playing?
+				if (status == Status.PLAYING) {
 
-						// System.out.println("Inside Stream Player Run method")
-						int toRead = audioDataLength;
-						int totalRead = 0;
+					// System.out.println("Inside Stream Player Run method")
+					int toRead = audioDataLength;
+					int totalRead = 0;
 
-						// Reads up a specified maximum number of bytes from audio stream
-						// wtf i have written here omg //to fix! cause it is complicated
-						for (; toRead > 0 && (nBytesRead = audioInputStream.read(audioDataBuffer.array(), totalRead,
-							toRead)) != -1; toRead -= nBytesRead, totalRead += nBytesRead)
+					// Reads up a specified maximum number of bytes from audio stream
+					// wtf i have written here omg //to fix! cause it is complicated
+					for (; toRead > 0 && (nBytesRead = audioInputStream.read(audioDataBuffer.array(), totalRead,
+						toRead)) != -1; toRead -= nBytesRead, totalRead += nBytesRead)
 
-							// Check for under run
-							if (outlet.getSourceDataLine().available() >= outlet.getSourceDataLine().getBufferSize())
-								logger.info(() -> "Underrun> Available=" + outlet.getSourceDataLine().available()
-									+ " , SourceDataLineBuffer=" + outlet.getSourceDataLine().getBufferSize());
+						// Check for under run
+						if (outlet.getSourceDataLine().available() >= outlet.getSourceDataLine().getBufferSize())
+							logger.info(() -> "Underrun> Available=" + outlet.getSourceDataLine().available()
+								+ " , SourceDataLineBuffer=" + outlet.getSourceDataLine().getBufferSize());
 
-						// Check if anything has been read
-						if (totalRead > 0) {
-							trimBuffer = audioDataBuffer.array();
-							if (totalRead < trimBuffer.length) {
-								trimBuffer = new byte[totalRead];
-								// Copies an array from the specified source array, beginning at the specified
-								// position, to the specified position of the destination array
-								// The number of components copied is equal to the length argument.
-								System.arraycopy(audioDataBuffer.array(), 0, trimBuffer, 0, totalRead);
-							}
-
-							// Writes audio data to the mixer via this source data line
-							outlet.getSourceDataLine().write(trimBuffer, 0, totalRead);
-
-							// Compute position in bytes in encoded stream.
-							final int nEncodedBytes = getEncodedStreamPosition();
-
-							// Notify all registered Listeners
-							listeners.forEach(listener -> {
-								if (audioInputStream instanceof PropertiesContainer) {
-									// Pass audio parameters such as instant
-									// bit rate, ...
-									listener.progress(nEncodedBytes, outlet.getSourceDataLine().getMicrosecondPosition(),
-										trimBuffer, ((PropertiesContainer) audioInputStream).properties());
-								} else
-									// Pass audio parameters
-									listener.progress(nEncodedBytes, outlet.getSourceDataLine().getMicrosecondPosition(),
-										trimBuffer, emptyMap);
-							});
-
+					// Check if anything has been read
+					if (totalRead > 0) {
+						trimBuffer = audioDataBuffer.array();
+						if (totalRead < trimBuffer.length) {
+							trimBuffer = new byte[totalRead];
+							// Copies an array from the specified source array, beginning at the specified
+							// position, to the specified position of the destination array
+							// The number of components copied is equal to the length argument.
+							System.arraycopy(audioDataBuffer.array(), 0, trimBuffer, 0, totalRead);
 						}
 
-					} else if (status == Status.PAUSED) {
-						// Flush and stop the source data line
-						outlet.flushAndStop();
-						goOutOfPause();
+						// Writes audio data to the mixer via this source data line
+						outlet.getSourceDataLine().write(trimBuffer, 0, totalRead);
+
+						// Compute position in bytes in encoded stream.
+						final int nEncodedBytes = getEncodedStreamPosition();
+
+						// Notify all registered Listeners
+						listeners.forEach(listener -> {
+							if (audioInputStream instanceof PropertiesContainer) {
+								// Pass audio parameters such as instant
+								// bit rate, ...
+								listener.progress(nEncodedBytes, outlet.getSourceDataLine().getMicrosecondPosition(),
+									trimBuffer, ((PropertiesContainer) audioInputStream).properties());
+							} else
+								// Pass audio parameters
+								listener.progress(nEncodedBytes, outlet.getSourceDataLine().getMicrosecondPosition(),
+									trimBuffer, emptyMap);
+						});
 
 					}
-				} catch (final IOException ex) {
-					logger.log(Level.WARNING, "\"Decoder Exception: \" ", ex);
-					status = Status.STOPPED;
-					generateEvent(Status.STOPPED, getEncodedStreamPosition(), null);
+
+				} else if (status == Status.PAUSED) {
+					// Flush and stop the source data line
+					outlet.flushAndStop();
+					goOutOfPause();
+
 				}
+			} catch (final IOException ex) {
+				logger.log(Level.WARNING, "\"Decoder Exception: \" ", ex);
+				status = Status.STOPPED;
+				generateEvent(Status.STOPPED, getEncodedStreamPosition(), null);
 			}
-			// Free audio resources.
-			outlet.drainStopAndFreeDataLine();
-
-			// Close stream.
-			closeStream();
-
-			// Notification of "End Of Media"
-			if (nBytesRead == -1)
-				generateEvent(Status.EOM, AudioSystem.NOT_SPECIFIED, null);
-
 		}
+		// Free audio resources.
+		outlet.drainStopAndFreeDataLine();
+
+		// Close stream.
+		closeStream();
+
+		// Notification of "End Of Media"
+		if (nBytesRead == -1)
+			generateEvent(Status.EOM, AudioSystem.NOT_SPECIFIED, null);
+
 		// Generate Event
 		status = Status.STOPPED;
 		generateEvent(Status.STOPPED, AudioSystem.NOT_SPECIFIED, null);
